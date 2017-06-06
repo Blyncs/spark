@@ -75,6 +75,10 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
 
   // The call site where this SparkContext was constructed.
   private val creationSite: CallSite = Utils.getCallSite()
+  // The call site where this SparkContext was stopped
+  private var stopSite: CallSite = _
+
+  def getStopSite: CallSite = stopSite
 
   // If true, log warnings instead of throwing exceptions when multiple SparkContexts are active
   private val allowMultipleContexts: Boolean =
@@ -103,6 +107,9 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
            |This stopped SparkContext was created at:
            |
            |${creationSite.longForm}
+           |
+           |And it was stopped at:
+           |${stopSite.longForm}
            |
            |The currently active SparkContext was created at:
            |
@@ -1746,6 +1753,9 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
       logInfo("SparkContext already stopped.")
       return
     }
+
+    stopSite = Utils.getCallSite()
+
     if (_shutdownHookRef != null) {
       ShutdownHookManager.removeShutdownHook(_shutdownHookRef)
     }
@@ -1801,7 +1811,7 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
     // Unset YARN mode system env variable, to allow switching between cluster types.
     System.clearProperty("SPARK_YARN_MODE")
     SparkContext.clearActiveContext()
-    logInfo("Successfully stopped SparkContext")
+    logError(s"Successfully stopped SparkContext at ${stopSite.longForm}")
   }
 
 

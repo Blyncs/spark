@@ -18,14 +18,14 @@
 package org.apache.spark
 
 import java.lang.ref.{ReferenceQueue, WeakReference}
-import java.util.concurrent.{ConcurrentLinkedQueue, ScheduledExecutorService, TimeUnit}
-
-import scala.collection.JavaConverters._
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ScheduledExecutorService, TimeUnit}
 
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.{RDD, ReliableRDDCheckpointData}
 import org.apache.spark.util.{AccumulatorContext, AccumulatorV2, ThreadUtils, Utils}
+
+import scala.collection.JavaConverters._
 
 /**
  * Classes that represent cleaning tasks.
@@ -58,7 +58,7 @@ private class CleanupTaskWeakReference(
  */
 private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
 
-  private val referenceBuffer = new ConcurrentLinkedQueue[CleanupTaskWeakReference]()
+  private val referenceBuffer = new ConcurrentHashMap[CleanupTaskWeakReference, Long]()
 
   private val referenceQueue = new ReferenceQueue[AnyRef]
 
@@ -165,7 +165,7 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
 
   /** Register an object for cleanup. */
   private def registerForCleanup(objectForCleanup: AnyRef, task: CleanupTask): Unit = {
-    referenceBuffer.add(new CleanupTaskWeakReference(task, objectForCleanup, referenceQueue))
+    referenceBuffer.put(new CleanupTaskWeakReference(task, objectForCleanup, referenceQueue), 0L)
   }
 
   /** Keep cleaning RDD, shuffle, and broadcast state. */

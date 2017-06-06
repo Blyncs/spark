@@ -74,7 +74,7 @@ class StorageListener(storageStatusListener: StorageStatusListener) extends Bloc
     _rddInfoMap.remove(unpersistRDD.rddId)
   }
 
-  override def onBlockUpdated(blockUpdated: SparkListenerBlockUpdated): Unit = {
+  override def onBlockUpdated(blockUpdated: SparkListenerBlockUpdated): Unit = synchronized {
     super.onBlockUpdated(blockUpdated)
     val blockId = blockUpdated.blockUpdatedInfo.blockId
     val storageLevel = blockUpdated.blockUpdatedInfo.storageLevel

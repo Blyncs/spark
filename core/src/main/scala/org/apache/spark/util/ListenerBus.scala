@@ -24,6 +24,7 @@ import scala.reflect.ClassTag
 import scala.util.control.NonFatal
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.ui.jobs.JobProgressListener
 
 /**
  * An event bus which posts events to its listeners.
@@ -37,7 +38,9 @@ private[spark] trait ListenerBus[L <: AnyRef, E] extends Logging {
    * Add a listener to listen events. This method is thread-safe and can be called in any thread.
    */
   final def addListener(listener: L): Unit = {
-    listeners.add(listener)
+    if (!listener.isInstanceOf[JobProgressListener]) {
+      listeners.add(listener)
+    }
   }
 
   /**

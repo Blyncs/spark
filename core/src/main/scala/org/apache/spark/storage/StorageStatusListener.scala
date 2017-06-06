@@ -92,7 +92,7 @@ class StorageStatusListener(conf: SparkConf) extends SparkListener {
     }
   }
 
-  override def onBlockUpdated(blockUpdated: SparkListenerBlockUpdated): Unit = {
+  override def onBlockUpdated(blockUpdated: SparkListenerBlockUpdated): Unit = synchronized {
     val executorId = blockUpdated.blockUpdatedInfo.blockManagerId.executorId
     val blockId = blockUpdated.blockUpdatedInfo.blockId
     val storageLevel = blockUpdated.blockUpdatedInfo.storageLevel

@@ -19,18 +19,18 @@ package org.apache.spark.ui.jobs
 
 import java.util.concurrent.TimeoutException
 
-import scala.collection.mutable.{HashMap, HashSet, LinkedHashMap, ListBuffer}
-
 import org.apache.spark._
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.executor.TaskMetrics
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
-import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
+import org.apache.spark.scheduler._
 import org.apache.spark.storage.BlockManagerId
 import org.apache.spark.ui.SparkUI
 import org.apache.spark.ui.jobs.UIData._
+
+import scala.collection.mutable.{HashMap, HashSet, ListBuffer}
 
 /**
  * :: DeveloperApi ::
@@ -77,17 +77,17 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
   // Total of completed and failed stages that have ever been run.  These may be greater than
   // `completedStages.size` and `failedStages.size` if we have run more stages or jobs than
   // JobProgressListener's retention limits.
-  var numCompletedStages = 0
-  var numFailedStages = 0
-  var numCompletedJobs = 0
-  var numFailedJobs = 0
+  @volatile var numCompletedStages = 0
+  @volatile var numFailedStages = 0
+  @volatile var numCompletedJobs = 0
+  @volatile var numFailedJobs = 0
 
   // Misc:
   val executorIdToBlockManagerId = HashMap[ExecutorId, BlockManagerId]()
 
   def blockManagerIds: Seq[BlockManagerId] = executorIdToBlockManagerId.values.toSeq
 
-  var schedulingMode: Option[SchedulingMode] = None
+  @volatile var schedulingMode: Option[SchedulingMode] = None
 
   // To limit the total memory usage of JobProgressListener, we only track information for a fixed
   // number of non-active jobs and stages (there is no limit for active jobs and stages):
@@ -105,7 +105,7 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
   // nesting, etc, so this lets us customize our notion of "size" for each structure:
 
   // These collections should all be empty once Spark is idle (no active stages / jobs):
-  private[spark] def getSizesOfActiveStateTrackingCollections: Map[String, Int] = {
+  private[spark] def getSizesOfActiveStateTrackingCollections: Map[String, Int] = synchronized {
     Map(
       "activeStages" -> activeStages.size,
       "activeJobs" -> activeJobs.size,
@@ -116,7 +116,7 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
 
   // These collections should stop growing once we have run at least `spark.ui.retainedStages`
   // stages and `spark.ui.retainedJobs` jobs:
-  private[spark] def getSizesOfHardSizeLimitedCollections: Map[String, Int] = {
+  private[spark] def getSizesOfHardSizeLimitedCollections: Map[String, Int] = synchronized {
     Map(
       "completedJobs" -> completedJobs.size,
       "failedJobs" -> failedJobs.size,
@@ -128,7 +128,7 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
 
   // These collections may grow arbitrarily, but once Spark becomes idle they should shrink back to
   // some bound based on the `spark.ui.retainedStages` and `spark.ui.retainedJobs` settings:
-  private[spark] def getSizesOfSoftSizeLimitedCollections: Map[String, Int] = {
+  private[spark] def getSizesOfSoftSizeLimitedCollections: Map[String, Int] = synchronized {
     Map(
       "jobIdToData" -> jobIdToData.size,
       "stageIdToData" -> stageIdToData.size,
@@ -424,15 +424,15 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
   }
 
   /**
-   * Upon receiving new metrics for a task, updates the per-stage and per-executor-per-stage
-   * aggregate metrics by calculating deltas between the currently recorded metrics and the new
-   * metrics.
-   */
+    * Upon receiving new metrics for a task, updates the per-stage and per-executor-per-stage
+    * aggregate metrics by calculating deltas between the currently recorded metrics and the new
+    * metrics.
+    */
   def updateAggregateMetrics(
-      stageData: StageUIData,
-      execId: String,
-      taskMetrics: TaskMetrics,
-      oldMetrics: Option[TaskMetricsUIData]) {
+                              stageData: StageUIData,
+                              execId: String,
+                              taskMetrics: TaskMetrics,
+                              oldMetrics: Option[TaskMetricsUIData]) {
     val execSummary = stageData.executorSummary.getOrElseUpdate(execId, new ExecutorSummary)
 
     val shuffleWriteDelta =
@@ -498,25 +498,27 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
     stageData.executorRunTime += timeDelta
   }
 
-  override def onExecutorMetricsUpdate(executorMetricsUpdate: SparkListenerExecutorMetricsUpdate) {
-    for ((taskId, sid, sAttempt, accumUpdates) <- executorMetricsUpdate.accumUpdates) {
-      val stageData = stageIdToData.getOrElseUpdate((sid, sAttempt), {
-        logWarning("Metrics update for task in unknown stage " + sid)
-        new StageUIData
-      })
-      val taskData = stageData.taskData.get(taskId)
-      val metrics = TaskMetrics.fromAccumulatorInfos(accumUpdates)
-      taskData.foreach { t =>
-        if (!t.taskInfo.finished) {
-          updateAggregateMetrics(stageData, executorMetricsUpdate.execId, metrics, t.metrics)
-          // Overwrite task metrics
-          t.updateTaskMetrics(Some(metrics))
+  override def onExecutorMetricsUpdate(executorMetricsUpdate: SparkListenerExecutorMetricsUpdate): Unit = {
+    synchronized {
+      for ((taskId, sid, sAttempt, accumUpdates) <- executorMetricsUpdate.accumUpdates) {
+        val stageData = stageIdToData.getOrElseUpdate((sid, sAttempt), {
+          logWarning("Metrics update for task in unknown stage " + sid)
+          new StageUIData
+        })
+        val taskData = stageData.taskData.get(taskId)
+        val metrics = TaskMetrics.fromAccumulatorInfos(accumUpdates)
+        taskData.foreach { t =>
+          if (!t.taskInfo.finished) {
+            updateAggregateMetrics(stageData, executorMetricsUpdate.execId, metrics, t.metrics)
+            // Overwrite task metrics
+            t.updateTaskMetrics(Some(metrics))
+          }
         }
       }
     }
-  }
+}
 
-  override def onEnvironmentUpdate(environmentUpdate: SparkListenerEnvironmentUpdate) {
+  override def onEnvironmentUpdate(environmentUpdate: SparkListenerEnvironmentUpdate): Unit = {
     synchronized {
       schedulingMode = environmentUpdate
         .environmentDetails("Spark Properties").toMap
@@ -525,7 +527,7 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
     }
   }
 
-  override def onBlockManagerAdded(blockManagerAdded: SparkListenerBlockManagerAdded) {
+  override def onBlockManagerAdded(blockManagerAdded: SparkListenerBlockManagerAdded): Unit = {
     synchronized {
       val blockManagerId = blockManagerAdded.blockManagerId
       val executorId = blockManagerId.executorId
@@ -533,18 +535,18 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
     }
   }
 
-  override def onBlockManagerRemoved(blockManagerRemoved: SparkListenerBlockManagerRemoved) {
+  override def onBlockManagerRemoved(blockManagerRemoved: SparkListenerBlockManagerRemoved): Unit = {
     synchronized {
       val executorId = blockManagerRemoved.blockManagerId.executorId
       executorIdToBlockManagerId.remove(executorId)
     }
   }
 
-  override def onApplicationStart(appStarted: SparkListenerApplicationStart) {
+  override def onApplicationStart(appStarted: SparkListenerApplicationStart): Unit = {
     startTime = appStarted.time
   }
 
-  override def onApplicationEnd(appEnded: SparkListenerApplicationEnd) {
+  override def onApplicationEnd(appEnded: SparkListenerApplicationEnd): Unit = {
     endTime = appEnded.time
   }
 
