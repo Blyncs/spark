@@ -27,6 +27,7 @@ import scala.reflect.ClassTag
 
 import com.esotericsoftware.kryo.{Kryo, KryoException, Serializer => KryoClassSerializer}
 import com.esotericsoftware.kryo.io.{Input => KryoInput, Output => KryoOutput}
+import com.esotericsoftware.kryo.pool._
 import com.esotericsoftware.kryo.serializers.{JavaSerializer => KryoJavaSerializer}
 import com.twitter.chill.{AllScalaRegistrar, EmptyScalaKryoInstantiator}
 import org.apache.avro.generic.{GenericData, GenericRecord}
@@ -80,6 +81,17 @@ class KryoSerializer(conf: SparkConf)
   private val avroSchemas = conf.getAvroSchema
 
   def newKryoOutput(): KryoOutput = new KryoOutput(bufferSize, math.max(bufferSize, maxBufferSize))
+
+  import com.esotericsoftware.kryo.Kryo
+  import com.esotericsoftware.kryo.pool.KryoFactory
+
+  private val factory: KryoFactory = new KryoFactory() {
+    override def create: Kryo = {
+      newKryo()
+    }
+  }
+
+  lazy val pool = new KryoPool.Builder(factory).softReferences.build
 
   def newKryo(): Kryo = {
     val instantiator = new EmptyScalaKryoInstantiator
@@ -256,23 +268,14 @@ private[spark] class KryoSerializerInstance(ks: KryoSerializer) extends Serializ
    * pool of size one. SerializerInstances are not thread-safe, hence accesses to this field are
    * not synchronized.
    */
-  @Nullable private[this] var cachedKryo: Kryo = borrowKryo()
+  // @Nullable private[this] var cachedKryo: Kryo = borrowKryo()
 
   /**
    * Borrows a [[Kryo]] instance. If possible, this tries to re-use a cached Kryo instance;
    * otherwise, it allocates a new instance.
    */
   private[serializer] def borrowKryo(): Kryo = {
-    if (cachedKryo != null) {
-      val kryo = cachedKryo
-      // As a defensive measure, call reset() to clear any Kryo state that might have been modified
-      // by the last operation to borrow this instance (see SPARK-7766 for discussion of this issue)
-      kryo.reset()
-      cachedKryo = null
-      kryo
-    } else {
-      ks.newKryo()
-    }
+    ks.pool.borrow()
   }
 
   /**
@@ -281,9 +284,7 @@ private[spark] class KryoSerializerInstance(ks: KryoSerializer) extends Serializ
    * re-use.
    */
   private[serializer] def releaseKryo(kryo: Kryo): Unit = {
-    if (cachedKryo == null) {
-      cachedKryo = kryo
-    }
+    ks.pool.release(kryo)
   }
 
   // Make these lazy vals to avoid creating a buffer unless we use them.
