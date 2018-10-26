@@ -1045,7 +1045,7 @@ Apart from these, the following properties are also available, and may be useful
   <td><code>spark.kryo.pool</code></td>
   <td>false</td>
   <td>
-    Whether to use new KryoPool based implentation nside KryoSerializer.
+    Whether to use new KryoPool based implentation inside KryoSerializer.
   </td>
 </tr>
 <tr>
