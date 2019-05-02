@@ -27,15 +27,20 @@ import org.apache.spark.executor.TaskMetrics
 import org.apache.spark.scheduler._
 import org.apache.spark.util.{Benchmark, Utils}
 
+// scalastyle:off
 /**
  * Benchmark to...
  *
+ * Regression seems to have occured here
+ * https://github.com/Blyncs/spark/commit/a6bf3db20773ba65cbc4f2775db7bd215e78829a#diff-b43d5bd18e0f3b5f33d734a37389ed34
+ *
  * build/sbt "core/test-only *AppStatusListenerBenchmark"
  */
+// scalastyle:on
 class AppStatusListenerBenchmark extends SparkFunSuite {
 
   val jobCount = 10
-  val stageCount = 100
+  val stageCount = 1000
   val taskCount = 10
 
   val benchmark = new Benchmark(
