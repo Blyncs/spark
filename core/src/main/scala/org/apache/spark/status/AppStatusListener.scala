@@ -44,7 +44,8 @@ private[spark] class AppStatusListener(
     kvstore: ElementTrackingStore,
     conf: SparkConf,
     live: Boolean,
-    lastUpdateTime: Option[Long] = None) extends SparkListener with Logging {
+    lastUpdateTime: Option[Long] = None,
+    sort: Boolean = true) extends SparkListener with Logging {
 
   import config._
 
@@ -967,7 +968,11 @@ private[spark] class AppStatusListener(
       return
     }
 
-    val view = kvstore.view(classOf[JobDataWrapper]).index("completionTime").first(0L)
+    val view = if (sort) {
+      kvstore.view(classOf[JobDataWrapper]).index("completionTime").first(0L)
+    } else {
+      kvstore.view(classOf[JobDataWrapper])
+    }
     val toDelete = KVUtils.viewToSeq(view, countToDelete.toInt) { j =>
       j.info.status != JobExecutionStatus.RUNNING && j.info.status != JobExecutionStatus.UNKNOWN
     }
@@ -983,7 +988,11 @@ private[spark] class AppStatusListener(
     // As the completion time of a skipped stage is always -1, we will remove skipped stages first.
     // This is safe since the job itself contains enough information to render skipped stages in the
     // UI.
-    val view = kvstore.view(classOf[StageDataWrapper]).index("completionTime")
+    val view = if (sort) {
+      kvstore.view(classOf[StageDataWrapper]).index("completionTime")
+    } else {
+      kvstore.view(classOf[StageDataWrapper])
+    }
     val stages = KVUtils.viewToSeq(view, countToDelete.toInt) { s =>
       s.info.status != v1.StageStatus.ACTIVE && s.info.status != v1.StageStatus.PENDING
     }
@@ -1039,9 +1048,13 @@ private[spark] class AppStatusListener(
     val countToDelete = calculateNumberToRemove(stage.savedTasks.get(), maxTasksPerStage).toInt
     if (countToDelete > 0) {
       val stageKey = Array(stage.info.stageId, stage.info.attemptNumber)
-      val view = kvstore.view(classOf[TaskDataWrapper])
-        .index(TaskIndexNames.COMPLETION_TIME)
-        .parent(stageKey)
+      val view = if (sort) {
+        kvstore.view(classOf[TaskDataWrapper])
+          .index(TaskIndexNames.COMPLETION_TIME)
+          .parent(stageKey)
+      } else {
+        kvstore.view(classOf[TaskDataWrapper]).index("stage").first(stageKey).last(stageKey)
+      }
 
       // Try to delete finished tasks only.
       val toDelete = KVUtils.viewToSeq(view, countToDelete) { t =>
