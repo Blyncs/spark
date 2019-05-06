@@ -45,7 +45,7 @@ private[spark] class AppStatusListener(
     conf: SparkConf,
     live: Boolean,
     lastUpdateTime: Option[Long] = None,
-    sort: Boolean = true) extends SparkListener with Logging {
+    sort: Boolean = false) extends SparkListener with Logging {
 
   import config._
 
