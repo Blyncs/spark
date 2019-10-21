@@ -45,7 +45,8 @@ private[spark] class AppStatusListener(
     conf: SparkConf,
     live: Boolean,
     lastUpdateTime: Option[Long] = None,
-    sort: Boolean = false) extends SparkListener with Logging {
+    sort: Boolean = false,
+    useNewCleanupStages: Boolean = true) extends SparkListener with Logging {
 
   import config._
 
@@ -461,6 +462,7 @@ private[spark] class AppStatusListener(
       maybeUpdate(task, System.nanoTime())
     }
   }
+
 
   override def onTaskEnd(event: SparkListenerTaskEnd): Unit = {
     // TODO: can this really happen?
@@ -979,7 +981,89 @@ private[spark] class AppStatusListener(
     toDelete.foreach { j => kvstore.delete(j.getClass(), j.info.jobId) }
   }
 
+
   private def cleanupStages(count: Long): Unit = {
+    if (useNewCleanupStages) {
+      newCleanupStages(count)
+    } else {
+      oldCleanupStages(count)
+    }
+  }
+
+  private def newCleanupStages(count: Long): Unit = {
+    val countToDelete = calculateNumberToRemove(count, conf.get(MAX_RETAINED_STAGES))
+    if (countToDelete <= 0L) {
+      return
+    }
+
+    val view = if (sort) {
+      kvstore.view(classOf[StageDataWrapper]).index("completionTime")
+    } else {
+      kvstore.view(classOf[StageDataWrapper])
+    }
+    val stages = KVUtils.viewToSeq(view, countToDelete.toInt) { s =>
+      s.info.status != v1.StageStatus.ACTIVE && s.info.status != v1.StageStatus.PENDING
+    }
+
+    if (stages.nonEmpty) {
+      val allStages = kvstore.view(classOf[StageDataWrapper]).asScala
+      val remainingAttemptsMap = allStages
+        .map(s => (s.info.stageId, s.info.attemptId))
+        .groupBy(_._1)
+        .mapValues(_.map(_._2).toSet)
+
+      val stageKeys = stages.map { s =>
+        val key = Array(s.info.stageId, s.info.attemptId)
+        kvstore.delete(s.getClass, key)
+
+        val attemptIds = remainingAttemptsMap(s.info.stageId)
+
+        val hasMoreAttempts = attemptIds.exists(_ != s.info.attemptId)
+
+        if (!hasMoreAttempts) {
+          kvstore.delete(classOf[RDDOperationGraphWrapper], s.info.stageId)
+        }
+
+        // Seq for comparison purposes
+        key.toSeq
+      }.toSet
+
+      def cleanup[T](view: Iterable[T], key: T => Seq[Int], id: T => Any): Unit = {
+        view.foreach { t =>
+          if (stageKeys.contains(key(t))) {
+            kvstore.delete(t.getClass, id(t))
+          }
+        }
+      }
+
+      // Delete tasks for all stages in one pass
+      // as deleting them for each stage individually is slow
+      val tasks = kvstore.view(classOf[TaskDataWrapper]).asScala
+      cleanup(
+        tasks,
+        (t: TaskDataWrapper) => Seq(t.stageId, t.stageAttemptId),
+        (t: TaskDataWrapper) => t.taskId
+      )
+
+      // Exec Summaries
+      val execSummaries = kvstore.view(classOf[ExecutorStageSummaryWrapper]).asScala
+      cleanup(
+        execSummaries,
+        (ec: ExecutorStageSummaryWrapper) => Seq(ec.stageId, ec.stageAttemptId),
+        (ec: ExecutorStageSummaryWrapper) => ec.id
+      )
+
+      // Quantiles
+      val cachedQuantiles = kvstore.view(classOf[CachedQuantile]).asScala
+      cleanup(
+        cachedQuantiles,
+        (q: CachedQuantile) => Seq(q.stageId, q.stageAttemptId),
+        (q: CachedQuantile) => q.id
+      )
+    }
+  }
+
+  private def oldCleanupStages(count: Long): Unit = {
     val countToDelete = calculateNumberToRemove(count, conf.get(MAX_RETAINED_STAGES))
     if (countToDelete <= 0L) {
       return
@@ -1020,12 +1104,12 @@ private[spark] class AppStatusListener(
         .closeableIterator()
 
       val hasMoreAttempts = try {
-        remainingAttempts.asScala.exists { other =>
-          other.info.attemptId != s.info.attemptId
-        }
-      } finally {
-        remainingAttempts.close()
-      }
+            remainingAttempts.asScala.exists { other =>
+              other.info.attemptId != s.info.attemptId
+            }
+          } finally {
+            remainingAttempts.close()
+          }
 
       if (!hasMoreAttempts) {
         kvstore.delete(classOf[RDDOperationGraphWrapper], s.info.stageId)
@@ -1043,6 +1127,7 @@ private[spark] class AppStatusListener(
       }
     }
   }
+
 
   private def cleanupTasks(stage: LiveStage): Unit = {
     val countToDelete = calculateNumberToRemove(stage.savedTasks.get(), maxTasksPerStage).toInt

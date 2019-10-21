@@ -43,7 +43,10 @@ import org.apache.spark.util.kvstore._
  * The configured triggers are run on a separate thread by default; they can be forced to run on
  * the calling thread by setting the `ASYNC_TRACKING_ENABLED` configuration to `false`.
  */
-private[spark] class ElementTrackingStore(store: KVStore, conf: SparkConf) extends KVStore {
+private[spark] class ElementTrackingStore(
+                                           store: KVStore,
+                                           conf: SparkConf,
+                                           shutdownSeconds: Int = 5) extends KVStore {
 
   import config._
 
@@ -140,7 +143,7 @@ private[spark] class ElementTrackingStore(store: KVStore, conf: SparkConf) exten
 
     stopped = true
     executor.shutdown()
-    if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+    if (!executor.awaitTermination(shutdownSeconds, TimeUnit.SECONDS)) {
       executor.shutdownNow()
     }
 
